@@ -1,280 +1,232 @@
-"""Multiple Image Analyzer - AI image classification with MobileNetV2 (ImageNet)."""
-import io
-import uuid
-from collections import Counter
-from datetime import datetime
-
+"""
+Image Analyzer - professional multi-image classifier
+Python + TensorFlow + MobileNetV2 (ImageNet, 1000 classes) + Wikipedia descriptions
+"""
+import html
 import numpy as np
 import pandas as pd
-import plotly.express as px
+import requests
 import streamlit as st
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps
 
-st.set_page_config(page_title="Multiple Image Analyzer", page_icon="🔍", layout="wide")
+BRAND = "Image Analyzer"  # change to your own brand name
+MAX_IMAGES = 2            # only one or two images can be analyzed at a time
 
-NAVY, TEAL, RED, INK = "#0B1F44", "#12B89A", "#D93636", "#5B6B88"
-MAX_MB = 10
-PAGES = ["Home", "Analyzer", "Results", "Dashboard", "Reports"]
+st.set_page_config(page_title=f"{BRAND} - identify anything in your photos", page_icon="🔍", layout="wide")
 
-st.markdown(f"""
+# ------------------------------------------------------------------
+# STYLE
+# ------------------------------------------------------------------
+st.markdown(
+    """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-html, body, [class*="css"], .stApp {{ font-family:'Plus Jakarta Sans',system-ui,sans-serif; }}
-.stApp {{ background:#F6F8FC; }}
-[data-testid="stSidebar"] {{ background:#fff; border-right:1px solid #E6EAF2; }}
-h1,h2,h3 {{ color:{NAVY}; letter-spacing:-0.02em; }}
-.hero {{ background:{NAVY}; color:#fff; border-radius:20px; padding:48px 44px; margin-bottom:24px; }}
-.hero h1 {{ color:#fff; font-size:2.6rem; font-weight:800; margin:0 0 12px; }}
-.hero p {{ color:#C9D3EA; font-size:1.05rem; max-width:640px; margin:0; }}
-.card {{ background:#fff; border:1px solid #E6EAF2; border-radius:16px; padding:20px;
-        box-shadow:0 2px 10px rgba(11,31,68,.06); height:100%; }}
-.card h4 {{ color:{NAVY}; margin:0 0 6px; }} .card p {{ color:{INK}; margin:0; font-size:.93rem; }}
-.badge {{ display:inline-block; padding:3px 10px; border-radius:8px; color:#fff; font-size:.8rem; font-weight:600; }}
-.bar {{ height:7px; border-radius:4px; background:#E6EAF2; overflow:hidden; margin:4px 0 10px; }}
-.bar > div {{ height:100%; background:{TEAL}; }}
-.pred {{ display:flex; justify-content:space-between; font-size:.85rem; color:{INK}; }}
-div.stButton > button, div.stDownloadButton > button {{ border-radius:10px; font-weight:600; }}
-div.stButton > button[kind="primary"], div.stDownloadButton > button[kind="primary"] {{
-    background:{TEAL}; border:none; color:#fff; }}
-[data-testid="stMetric"] {{ background:#fff; border:1px solid #E6EAF2; border-radius:16px; padding:16px;
-        box-shadow:0 2px 10px rgba(11,31,68,.06); }}
-</style>""", unsafe_allow_html=True)
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+:root{ --ink:#0B1220; --muted:#5B6577; --line:#E6E9F0; --blue:#2B59FF; --soft:#EEF2FF; }
+html, body, [class*="css"], .stApp { font-family:'Inter',system-ui,sans-serif; color:var(--ink); }
+.stApp { background:#fff; }
+#MainMenu, footer, header { visibility:hidden; }
+.block-container { max-width:1000px; padding-top:1.2rem; }
 
+.nav { display:flex; align-items:center; justify-content:space-between; padding:.4rem 0 1.2rem; }
+.brand { display:flex; align-items:center; gap:.6rem; font-weight:700; font-size:1.1rem; }
+.mark { width:30px; height:30px; border-radius:9px; background:linear-gradient(135deg,#2B59FF,#8B5CF6); }
+.nav small { color:var(--muted); font-size:.9rem; }
 
-# ---------------------------------------------------------------- model ----
-@st.cache_resource(show_spinner="Loading MobileNetV2 (ImageNet weights)...")
+.hero { border:1px solid var(--line); border-radius:28px; padding:3.2rem 3rem;
+  background: radial-gradient(900px 300px at 85% -10%, rgba(139,92,246,.18), transparent 60%),
+              radial-gradient(700px 300px at 0% 110%, rgba(43,89,255,.14), transparent 60%), #FAFBFF; }
+.hero h1 { font-size:clamp(2.2rem,5vw,3.6rem); line-height:1.05; font-weight:800; letter-spacing:-.035em; margin:0 0 1rem; max-width:760px; }
+.hero p { font-size:1.15rem; color:var(--muted); max-width:620px; line-height:1.6; margin:0; }
+
+.stats { display:grid; grid-template-columns:repeat(4,1fr); gap:1rem; margin:1.4rem 0 2.4rem; }
+.stat { border:1px solid var(--line); border-radius:16px; padding:1rem 1.2rem; background:#fff; }
+.stat b { display:block; font-size:1.6rem; font-weight:800; letter-spacing:-.02em; }
+.stat span { color:var(--muted); font-size:.92rem; }
+
+h2.sec { font-size:1.6rem; font-weight:700; letter-spacing:-.02em; margin:2rem 0 .3rem; }
+p.sub { color:var(--muted); margin:0 0 1rem; }
+
+.how { display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; margin-bottom:1rem; }
+.how div { border:1px solid var(--line); border-radius:16px; padding:1.2rem; }
+.how b { display:block; margin-bottom:.3rem; }
+.how span { color:var(--muted); font-size:.95rem; line-height:1.5; }
+
+[data-testid="stFileUploader"] section { border:1.5px dashed #AAB8FF; background:#F8FAFF; border-radius:18px; padding:1.8rem; }
+[data-testid="stFileUploader"] button { background:var(--blue); color:#fff; border:0; border-radius:10px; font-weight:600; }
+
+div[data-testid="stVerticalBlockBorderWrapper"] { border-radius:18px; border-color:var(--line); }
+.stImage img { border-radius:12px; }
+.chip { display:inline-block; padding:.18rem .65rem; border-radius:999px; font-size:.78rem; font-weight:600; margin-right:.35rem; }
+.c-Dog{background:#FFF1DB;color:#9A5B00} .c-Cat{background:#F1E8FF;color:#6B2FC9}
+.c-Vehicle{background:#DDF6F0;color:#0A6B58} .c-Other{background:#EEF0F4;color:#46505F}
+.c-low{background:#FFE9E7;color:#B42318}
+.kicker { color:var(--muted); font-size:.82rem; margin-top:.7rem; }
+.name { font-size:1.45rem; font-weight:800; letter-spacing:-.02em; text-transform:capitalize; line-height:1.15; }
+.conf { color:var(--muted); font-size:.95rem; }
+.row { display:flex; align-items:center; gap:.6rem; margin:.28rem 0; font-size:.9rem; }
+.row .n { width:42%; text-transform:capitalize; }
+.row .t { flex:1; height:8px; background:#EEF1F6; border-radius:99px; overflow:hidden; }
+.row .t i { display:block; height:100%; background:linear-gradient(90deg,#2B59FF,#8B5CF6); border-radius:99px; }
+.row .p { width:2.8rem; text-align:right; color:var(--muted); }
+.about { color:#2A3345; font-size:.93rem; line-height:1.55; margin-top:.7rem; }
+.about a { color:var(--blue); text-decoration:none; font-weight:600; }
+
+.stDownloadButton button { background:var(--ink); color:#fff; border:0; border-radius:10px; font-weight:600; padding:.5rem 1.2rem; }
+.foot { text-align:center; color:var(--muted); font-size:.9rem; margin:3rem 0 1rem; }
+@media (max-width:800px){ .stats,.how{grid-template-columns:1fr 1fr} .hero{padding:2rem 1.4rem} }
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+# ------------------------------------------------------------------
+# MODEL
+# ------------------------------------------------------------------
+@st.cache_resource(show_spinner="Loading the AI model (first run only)...")
 def load_model():
     from tensorflow.keras.applications import MobileNetV2
-    return MobileNetV2(weights="imagenet", include_top=True)
+    return MobileNetV2(weights="imagenet")
 
 
-def preprocess(raw: bytes) -> np.ndarray:
-    """bytes -> RGB -> 224x224 -> float array (raises on corrupted files)."""
-    img = Image.open(io.BytesIO(raw))
-    img.load()
-    img = img.convert("RGB").resize((224, 224))
-    return np.asarray(img, dtype="float32")
+VEHICLES = {
+    "sports car", "convertible", "cab", "jeep", "limousine", "minivan", "racer", "beach wagon", "pickup",
+    "model t", "police van", "ambulance", "minibus", "go-kart", "tow truck", "trailer truck", "fire engine",
+    "garbage truck", "school bus", "moped", "motor scooter", "mountain bike", "bicycle-built-for-two",
+    "tractor", "trolleybus", "golfcart", "passenger car", "streetcar", "recreational vehicle", "moving van",
+}
+BIG_CATS = {"lion", "tiger", "leopard", "jaguar", "cheetah", "cougar", "lynx", "snow leopard"}
 
 
-def classify(items: list[dict]) -> list[dict]:
-    """Batch-classify items; corrupted images are reported as failed, not dropped."""
-    from tensorflow.keras.applications.mobilenet_v2 import decode_predictions, preprocess_input
-    arrays, ok_idx, results = [], [], []
-    for i, it in enumerate(items):
-        base = {"id": it["id"], "name": it["name"], "size": it["size"], "bytes": it["bytes"]}
-        try:
-            arrays.append(preprocess(it["bytes"]))
-            ok_idx.append(i)
-            results.append({**base, "status": "Analyzed", "top3": []})
-        except (UnidentifiedImageError, OSError, ValueError) as e:
-            results.append({**base, "status": f"Failed: {type(e).__name__}", "top3": []})
-    if arrays:
-        batch = preprocess_input(np.stack(arrays))
-        preds = load_model().predict(batch, verbose=0)
-        for i, decoded in zip(ok_idx, decode_predictions(preds, top=3)):
-            results[i]["top3"] = [(label.replace("_", " "), float(p) * 100) for _, label, p in decoded]
-    return results
+def categorize(idx: int, label: str) -> str:
+    """ImageNet ids 151-268 are all dog breeds, 281-285 are domestic cats."""
+    l = label.lower()
+    if 151 <= idx <= 268:
+        return "Dog"
+    if 281 <= idx <= 285 or l in BIG_CATS:
+        return "Cat"
+    if l in VEHICLES:
+        return "Vehicle"
+    return "Other"
 
 
-def quality(conf: float) -> tuple[str, str]:
-    if conf >= 70:
-        return "High confidence", TEAL
-    if conf >= 40:
-        return "Medium confidence", "#E6A100"
-    return "Low confidence", RED
+@st.cache_data(show_spinner=False)
+def classify(data: bytes, top_k: int = 5):
+    import io
+    from tensorflow.keras.applications.mobilenet_v2 import preprocess_input, decode_predictions
+
+    img = ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("RGB")
+    img = ImageOps.fit(img, (224, 224), Image.LANCZOS)
+    x = preprocess_input(np.expand_dims(np.array(img, dtype="float32"), 0))
+    preds = load_model().predict(x, verbose=0)
+    order = np.argsort(preds[0])[::-1][:top_k]
+    named = decode_predictions(preds, top=top_k)[0]
+    out = []
+    for idx, (_, label, p) in zip(order, named):
+        label = label.replace("_", " ")
+        out.append({"label": label, "p": float(p), "cat": categorize(int(idx), label)})
+    return out
 
 
-def fmt_size(n: int) -> str:
-    return f"{n/1024:.1f} KB" if n < 1024**2 else f"{n/1024**2:.2f} MB"
+@st.cache_data(show_spinner=False, ttl=86400)
+def describe(label: str, cat: str):
+    query = {"Dog": f"{label} dog breed", "Cat": f"{label} cat"}.get(cat, label)
+    try:
+        hit = requests.get("https://en.wikipedia.org/w/api.php",
+                           params={"action": "query", "list": "search", "srsearch": query, "srlimit": 1, "format": "json"},
+                           timeout=6).json()
+        title = hit["query"]["search"][0]["title"]
+        s = requests.get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{title.replace(' ', '_')}",
+                         timeout=6, headers={"User-Agent": "ImageAnalyzer/2.0"}).json()
+        return s.get("extract", ""), s.get("content_urls", {}).get("desktop", {}).get("page", "")
+    except Exception:
+        return "", ""
 
 
-# ---------------------------------------------------------------- state ----
-ss = st.session_state
-ss.setdefault("files", [])        # uploaded, not yet analyzed
-ss.setdefault("results", [])      # latest analysis
-ss.setdefault("history", [])      # session history of runs
-ss.setdefault("uploader_key", 0)
-ss.setdefault("page", "Home")
-ss.setdefault("rejected", [])
+# ------------------------------------------------------------------
+# PAGE
+# ------------------------------------------------------------------
+st.markdown(
+    f"""
+<div class="nav"><div class="brand"><div class="mark"></div>{BRAND}</div><small>Free to use. No sign-up.</small></div>
+<div class="hero">
+  <h1>Know exactly what is in every photo.</h1>
+  <p>Upload dogs, cats, cars or anything else. Get the breed or type, a confidence score and a short description for each image.</p>
+</div>
+<div class="stats">
+  <div class="stat"><b>1,000</b><span>object categories</span></div>
+  <div class="stat"><b>120</b><span>dog breeds</span></div>
+  <div class="stat"><b>1 or 2</b><span>images per analysis</span></div>
+  <div class="stat"><b>CSV</b><span>export your results</span></div>
+</div>
+<h2 class="sec">How it works</h2>
+<p class="sub">A convolutional neural network learns visual patterns, so it needs no training from you.</p>
+<div class="how">
+  <div><b>1. Upload</b><span>Add one photo or a whole batch in JPG, PNG or WebP.</span></div>
+  <div><b>2. Analyze</b><span>MobileNetV2 compares shapes, textures and colors against what it learned from millions of images.</span></div>
+  <div><b>3. Understand</b><span>See the top predictions with scores, plus a plain-language description of the top match.</span></div>
+</div>
+<h2 class="sec">Analyze your images</h2>
+<p class="sub">Upload one or two photos.</p>
+""",
+    unsafe_allow_html=True,
+)
 
+files = st.file_uploader("Upload images", type=["jpg", "jpeg", "png", "webp", "bmp"],
+                         accept_multiple_files=True, label_visibility="collapsed")
 
-def go(page: str):
-    ss["page"] = page
+if files and len(files) > MAX_IMAGES:
+    st.warning(f"You can analyze up to {MAX_IMAGES} images at a time. Only the first {MAX_IMAGES} will be used.")
+    files = files[:MAX_IMAGES]
 
+if files:
+    results = []
+    bar = st.progress(0.0, text="Analyzing...")
+    for i, f in enumerate(files):
+        data = f.getvalue()
+        results.append({"name": f.name, "data": data, "preds": classify(data)})
+        bar.progress((i + 1) / len(files), text=f"Analyzed {i + 1} of {len(files)}")
+    bar.empty()
 
-def results_df(results: list[dict]) -> pd.DataFrame:
-    rows = []
-    for r in results:
-        ok = bool(r["top3"])
-        rows.append({
-            "Filename": r["name"],
-            "Predicted class": r["top3"][0][0] if ok else "-",
-            "Confidence (%)": round(r["top3"][0][1], 2) if ok else None,
-            "2nd prediction": f"{r['top3'][1][0]} ({r['top3'][1][1]:.1f}%)" if ok else "-",
-            "3rd prediction": f"{r['top3'][2][0]} ({r['top3'][2][1]:.1f}%)" if ok else "-",
-            "Analysis status": r["status"],
-        })
-    return pd.DataFrame(rows)
-
-
-# -------------------------------------------------------------- sidebar ----
-with st.sidebar:
-    st.markdown(f"<h3 style='margin-bottom:0'>🔍 Image Analyzer</h3>"
-                f"<p style='color:{INK};margin-top:2px'>Multiple Image Analyzer</p>", unsafe_allow_html=True)
-    st.radio("Navigate", PAGES, key="page", label_visibility="collapsed")
-    st.divider()
-    st.caption(f"Queued: **{len(ss.files)}** · Analyzed: **{sum(bool(r['top3']) for r in ss.results)}**")
-    if st.button("Reset analysis", use_container_width=True):
-        ss.files, ss.results, ss.history, ss.rejected = [], [], [], []
-        ss.uploader_key += 1
-        st.toast("Analysis reset.")
-        st.rerun()
-
-page = ss.page
-
-# ----------------------------------------------------------------- home ----
-if page == "Home":
-    st.markdown("""<div class="hero"><h1>Classify many images at once.</h1>
-    <p>Upload a batch of photos and get the top three predicted categories with confidence scores,
-    an analytics dashboard and a downloadable report. Powered by MobileNetV2 trained on ImageNet.</p></div>""",
+    # ---- summary ----
+    cats = [r["preds"][0]["cat"] for r in results]
+    counts = {c: cats.count(c) for c in ["Dog", "Cat", "Vehicle", "Other"] if cats.count(c)}
+    summary = "".join(f'<span class="chip c-{c}">{n} {c.lower()}{"s" if n > 1 else ""}</span>' for c, n in counts.items())
+    st.markdown(f'<h2 class="sec">Results</h2><p class="sub">{len(results)} images analyzed &nbsp; {summary}</p>',
                 unsafe_allow_html=True)
-    st.button("Start analyzing", type="primary", on_click=go, args=("Analyzer",))
 
-    st.subheader("Key features")
-    feats = [("Batch upload", "Drag and drop many JPG, JPEG or PNG files and preview them before analysis."),
-             ("Top 3 predictions", "Every image gets three ranked labels with real model confidence."),
-             ("Analytics", "Category distribution, average confidence and per-image comparison charts."),
-             ("CSV report", "Download filenames, predicted classes, confidence and status.")]
-    for col, (t, d) in zip(st.columns(4), feats):
-        col.markdown(f"<div class='card'><h4>{t}</h4><p>{d}</p></div>", unsafe_allow_html=True)
+    shown = results
 
-    st.subheader("How it works")
-    steps = [("Upload", "Add your images."), ("Preprocess", "Convert to RGB, resize to 224×224, apply MobileNetV2 scaling."),
-             ("Predict", "One batched forward pass through the network."), ("Review", "Browse results, charts and reports.")]
-    for col, (t, d) in zip(st.columns(4), steps):
-        col.markdown(f"<div class='card'><h4>{t}</h4><p>{d}</p></div>", unsafe_allow_html=True)
+    # ---- grid ----
+    cols = st.columns(len(shown), gap="large")
+    if True:
+        for col, r in zip(cols, shown):
+            top = r["preds"][0]
+            text, url = describe(top["label"], top["cat"])
+            with col, st.container(border=True):
+                st.image(r["data"], use_container_width=True)
+                kind = {"Dog": "Breed", "Cat": "Type", "Vehicle": "Vehicle type"}.get(top["cat"], "Identified as")
+                low = '<span class="chip c-low">Low confidence</span>' if top["p"] < 0.35 else ""
+                st.markdown(
+                    f'<span class="chip c-{top["cat"]}">{top["cat"]}</span>{low}'
+                    f'<div class="kicker">{kind}</div>'
+                    f'<div class="name">{html.escape(top["label"])}</div>'
+                    f'<div class="conf">{top["p"] * 100:.0f}% confidence</div>',
+                    unsafe_allow_html=True,
+                )
+                rows = "".join(
+                    f'<div class="row"><span class="n">{html.escape(p["label"])}</span>'
+                    f'<span class="t"><i style="width:{p["p"] * 100:.1f}%"></i></span>'
+                    f'<span class="p">{p["p"] * 100:.0f}%</span></div>' for p in r["preds"][:3])
+                about = (f'<div class="about">{html.escape(text[:260])}{"..." if len(text) > 260 else ""} '
+                         f'<a href="{html.escape(url)}" target="_blank">Read more</a></div>') if text else ""
+                st.markdown(f'<div style="margin-top:.6rem">{rows}</div>{about}', unsafe_allow_html=True)
 
-    st.subheader("Technology")
-    st.write("Python · Streamlit · TensorFlow/Keras · MobileNetV2 (ImageNet) · Pillow · NumPy · Pandas · Plotly")
-    st.info("**Image classification, not object detection.** The model assigns one of 1,000 ImageNet "
-            "categories to the whole image. It does not locate objects or draw boxes, and it can only "
-            "name categories it was trained on.")
+    # ---- export ----
+    df = pd.DataFrame([{"file": r["name"], "category": r["preds"][0]["cat"], "prediction": r["preds"][0]["label"],
+                        "confidence_%": round(r["preds"][0]["p"] * 100, 1)} for r in results])
+    st.write("")
+    st.download_button("Download results (CSV)", df.to_csv(index=False).encode(), "predictions.csv", "text/csv")
+    st.caption("Dogs are matched to 120 breeds. Cats are matched to 5 types (tabby, tiger cat, Persian, Siamese, Egyptian) "
+               "plus big cats. Cars are matched to body type, such as sports car, convertible or jeep, not brand or model.")
 
-# ------------------------------------------------------------- analyzer ----
-elif page == "Analyzer":
-    st.title("Image analyzer")
-    uploads = st.file_uploader("Drop images here or browse", type=["jpg", "jpeg", "png"],
-                               accept_multiple_files=True, key=f"up_{ss.uploader_key}")
-    if uploads:
-        for f in uploads:
-            data = f.getvalue()
-            if len(data) > MAX_MB * 1024**2:
-                ss.rejected.append(f"{f.name}: larger than {MAX_MB} MB")
-                continue
-            ss.files.append({"id": uuid.uuid4().hex, "name": f.name, "size": len(data), "bytes": data})
-        ss.uploader_key += 1   # clear the widget so individual removal works
-        st.rerun()
-    for msg in ss.rejected:
-        st.warning(f"Skipped {msg}")
-    ss.rejected = []
-
-    if not ss.files:
-        st.info("No images yet. Upload at least one JPG, JPEG or PNG to begin.")
-    else:
-        c1, c2, _ = st.columns([1, 1, 4])
-        analyze = c1.button("Analyze images", type="primary")
-        if c2.button("Clear all"):
-            ss.files = []
-            st.rerun()
-
-        cols = st.columns(4)
-        for i, f in enumerate(list(ss.files)):
-            with cols[i % 4]:
-                try:
-                    st.image(f["bytes"], use_container_width=True)
-                except Exception:
-                    st.error("Preview unavailable (file may be corrupted)")
-                st.caption(f"**{f['name']}**  \n{fmt_size(f['size'])}")
-                if st.button("Remove", key=f"rm_{f['id']}"):
-                    ss.files = [x for x in ss.files if x["id"] != f["id"]]
-                    st.rerun()
-
-        if analyze:
-            try:
-                with st.spinner(f"Analyzing {len(ss.files)} image(s)..."):
-                    ss.results = classify(ss.files)
-                ss.history.append({"Run time": datetime.now().strftime("%H:%M:%S"),
-                                   "Images": len(ss.results),
-                                   "Analyzed": sum(bool(r["top3"]) for r in ss.results)})
-                ss.files = []
-                ss.page = "Results"
-                st.rerun()
-            except Exception as e:
-                st.error(f"Analysis failed: {e}")
-
-# -------------------------------------------------------------- results ----
-elif page == "Results":
-    st.title("Prediction results")
-    if not ss.results:
-        st.info("Nothing to show yet. Upload and analyze images first.")
-        st.button("Go to analyzer", on_click=go, args=("Analyzer",))
-    else:
-        cols = st.columns(3)
-        for i, r in enumerate(ss.results):
-            with cols[i % 3]:
-                with st.container(border=True):
-                    st.image(r["bytes"], use_container_width=True)
-                    st.markdown(f"**{r['name']}**")
-                    if r["top3"]:
-                        label, conf = r["top3"][0]
-                        q, color = quality(conf)
-                        st.markdown(f"<span class='badge' style='background:{color}'>{q}</span>", unsafe_allow_html=True)
-                        st.markdown(f"### {label.title()} · {conf:.1f}%")
-                        for lab, p in r["top3"]:
-                            st.markdown(f"<div class='pred'><span>{lab}</span><span>{p:.1f}%</span></div>"
-                                        f"<div class='bar'><div style='width:{min(p,100):.1f}%'></div></div>",
-                                        unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"<span class='badge' style='background:{RED}'>{r['status']}</span>", unsafe_allow_html=True)
-                        st.caption("This file could not be read as an image.")
-
-# ------------------------------------------------------------ dashboard ----
-elif page == "Dashboard":
-    st.title("Analytics dashboard")
-    if not ss.results:
-        st.info("Analyze some images to see statistics.")
-    else:
-        df = results_df(ss.results)
-        ok = df[df["Analysis status"] == "Analyzed"]
-        m = st.columns(4)
-        m[0].metric("Total images", len(df))
-        m[1].metric("Successfully analyzed", len(ok))
-        m[2].metric("Average confidence", f"{ok['Confidence (%)'].mean():.1f}%" if len(ok) else "-")
-        m[3].metric("Most frequent category",
-                    Counter(ok["Predicted class"]).most_common(1)[0][0] if len(ok) else "-")
-        if len(ok):
-            a, b = st.columns(2)
-            dist = ok["Predicted class"].value_counts().reset_index()
-            dist.columns = ["Category", "Images"]
-            fig1 = px.bar(dist, x="Category", y="Images", title="Prediction category distribution",
-                          color_discrete_sequence=[NAVY])
-            a.plotly_chart(fig1, use_container_width=True)
-            fig2 = px.bar(ok, x="Filename", y="Confidence (%)", title="Confidence by image",
-                          color="Confidence (%)", color_continuous_scale=[RED, "#E6A100", TEAL],
-                          range_color=[0, 100])
-            b.plotly_chart(fig2, use_container_width=True)
-        if ss.history:
-            st.subheader("Session history")
-            st.dataframe(pd.DataFrame(ss.history), use_container_width=True, hide_index=True)
-
-# -------------------------------------------------------------- reports ----
-elif page == "Reports":
-    st.title("Reports")
-    if not ss.results:
-        st.info("Analyze images first, then download your report here.")
-    else:
-        df = results_df(ss.results)
-        st.dataframe(df, use_container_width=True, hide_index=True)
-        st.download_button("Download CSV report", df.to_csv(index=False).encode("utf-8"),
-                           file_name=f"image_analysis_{datetime.now():%Y%m%d_%H%M%S}.csv",
-                           mime="text/csv", type="primary")
+st.markdown(f'<div class="foot">{BRAND} · Built with Python, TensorFlow and MobileNetV2</div>', unsafe_allow_html=True)
