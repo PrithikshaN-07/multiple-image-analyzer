@@ -2,6 +2,7 @@
 
 Batch image classification with **MobileNetV2 (ImageNet)** in a single Streamlit app.
 This is **image classification** (one label set per image), not object detection.
+[Check out the app live](https://multiple-image-analyzergit-i2uoahmrcx3aawkd7abfim.streamlit.app/)
 
 ## Features
 Multi-image upload (JPG/JPEG/PNG, 10 MB max each) · previews · remove/clear · top-3 predictions with
